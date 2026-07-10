@@ -10,28 +10,28 @@ comptime {
 
 /// This is NOT thread safe!
 
-/// AllocTracker bridges Zig's allocator interface to cgltf's C callbacks.
+/// AllocBridge bridges Zig's allocator interface to cgltf's C callbacks.
 ///
 /// cgltf lets you pass custom alloc/free functions plus a void* user_data
 /// in Options.memory. We store a pointer to this struct as user_data, so
 /// both callbacks can reach the backing Zig allocator without any global
-/// state — each parseAndLoadFile call gets its own tracker.
+/// state — each parseAndLoadFile call gets its own bridge.
 ///
 /// The core trick is stolen from SDS: every allocation is oversized by
 /// header_size bytes, the requested size is written at the front, and the
 /// pointer returned to cgltf starts right after. On free we subtract
 /// header_size to find the base and the stored length.
 ///
-/// The tracker itself is heap-allocated by parseAndLoadFile so it outlives
+/// The bridge itself is heap-allocated by parseAndLoadFile so it outlives
 /// the call — cgltf copies the user_data pointer into Data.memory and
 /// uses it again when cgltf_free walks the tree. freeData extracts the
-/// tracker, lets cgltf_free release everything, then destroys the tracker.
-pub const AllocTracker = struct {
+/// bridge, lets cgltf_free release everything, then destroys the bridge.
+pub const AllocBridge = struct {
     backing_allocator: std.mem.Allocator,
 
     const header_size = @sizeOf(MaxAlign);
  
-    pub fn init(allocator: std.mem.Allocator) AllocTracker {
+    pub fn init(allocator: std.mem.Allocator) AllocBridge {
         return .{
             .backing_allocator = allocator,
         };
@@ -53,7 +53,7 @@ pub const AllocTracker = struct {
     /// overflows. cgltf treats null as "out of memory" and propagates the
     /// error, so we don't need to panic here.
     pub fn allocFn(user: ?*anyopaque, size: usize) callconv(.c) ?*anyopaque {
-        const self: *AllocTracker = @ptrCast(@alignCast(user));
+        const self: *AllocBridge = @ptrCast(@alignCast(user));
 
         const bytes = self.backing_allocator.alignedAlloc(
             u8,
@@ -71,7 +71,7 @@ pub const AllocTracker = struct {
     /// to cgltf, we step back to recover the base pointer and the stored size,
     /// then free the whole allocation. Accepts null (C free semantics).
     pub fn freeFn(user: ?*anyopaque, ptr: ?*anyopaque) callconv(.c) void {
-        const self: *AllocTracker = @ptrCast(@alignCast(user));
+        const self: *AllocBridge = @ptrCast(@alignCast(user));
         const usable_ptr: [*]u8 = @ptrCast(ptr orelse return);
 
         // Step back past the header to the original allocation base.
@@ -128,24 +128,23 @@ pub const Options = extern struct {
 /// Parse and load a glTF file in one call. All memory is allocated through the
 /// provided Zig allocator. Call `freeData` to release everything.
 pub fn parseAndLoadFile(allocator: std.mem.Allocator, pathname: [:0]const u8) Error!*Data {
-    // Heap-allocate the tracker so it outlives this call — cgltf stores
+    // Heap-allocate the bridge so it outlives this call — cgltf stores
     // user_data inside Data.memory and uses it again in cgltf_free.
-    const tracker = allocator.create(AllocTracker) catch return error.OutOfMemory;
-    tracker.* = AllocTracker.init(allocator);
+    const bridge = allocator.create(AllocBridge) catch return error.OutOfMemory;
+    bridge.* = AllocBridge.init(allocator);
  
     const options = Options{
         .memory = .{
-            .alloc_func = &AllocTracker.allocFn,
-            .free_func = &AllocTracker.freeFn,
-            .user_data = @ptrCast(tracker),
+            .alloc_func = &AllocBridge.allocFn,
+            .free_func = &AllocBridge.freeFn,
+            .user_data = @ptrCast(bridge),
         },
     };
  
     const data = try parseFile(options, pathname);
     errdefer {
         cgltf_free(data);
-        tracker.deinit();
-        allocator.destroy(tracker);
+        allocator.destroy(bridge);
     }
  
     try loadBuffers(options, data, pathname);
@@ -153,14 +152,14 @@ pub fn parseAndLoadFile(allocator: std.mem.Allocator, pathname: [:0]const u8) Er
     return data;
 }
  
-/// Free all data allocated by `parseAndLoadFile`. Extracts the tracker from
+/// Free all data allocated by `parseAndLoadFile`. Extracts the bridge from
 /// the stored memory options, so no allocator argument is needed.
 pub fn freeData(data: *Data) void {
-    const tracker: *AllocTracker = @ptrCast(@alignCast(data.memory.user_data));
-    const allocator = tracker.backing_allocator;
+    const bridge: *AllocBridge = @ptrCast(@alignCast(data.memory.user_data));
+    const allocator = bridge.backing_allocator;
  
     cgltf_free(data); // calls freeFn for every cgltf allocation
-    allocator.destroy(tracker); // frees the tracker struct itself
+    allocator.destroy(bridge); // frees the bridge struct itself
 }
  
 // Lower-level API for advanced usage (bring your own Options).
