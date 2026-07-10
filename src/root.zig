@@ -914,5 +914,5 @@ extern fn cgltf_validate(data: ?*Data) Result;
 // =============================================================================
  
 test {
-    std.testing.refAllDeclsRecursive(@This());
+    std.testing.refAllDecls(@This());
 }
