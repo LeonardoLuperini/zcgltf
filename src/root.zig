@@ -180,6 +180,7 @@ pub fn free(data: *Data) void {
     cgltf_free(data);
 }
 
+
 // =============================================================================
 // Error handling
 // =============================================================================
@@ -358,12 +359,6 @@ pub const MeshoptCompressionFilter = enum(c_int) {
 };
  
 // =============================================================================
-// Options
-// =============================================================================
- 
-
- 
-// =============================================================================
 // Data structures — extern structs matching cgltf's C layout.
 // =============================================================================
  
@@ -441,6 +436,66 @@ pub const Accessor = extern struct {
     extras: Extras,
     extensions_count: usize,
     extensions: ?[*]Extension,
+
+    pub fn getDataSlice(accessor: *const Accessor, comptime T: type) ![]const T{
+        if (accessor.component_type != .r_32f) return error.AccessorComponentMismatch;
+        const expected_type: Type = switch (T) {
+            [2]f32 => .vec2,
+            [3]f32 => .vec3,
+            [4]f32 => .vec4,
+            else => @compileError("unsupported type: expected [2]f32, [3]f32, or [4]f32"),
+        };
+        if (accessor.type != expected_type) return error.AccessorTypeMismatch;
+
+        const buffer_view = accessor.buffer_view orelse return error.MissingBufferView;
+        if (buffer_view.stride != 0 and buffer_view.stride != @sizeOf(T)) {
+            return error.UnsupportedStride;
+        }
+
+        const base: [*]const u8 = @ptrCast(
+            buffer_view.buffer.data orelse return error.BufferNotLoaded
+        );
+        const data: [*]const T = @ptrCast(
+            @alignCast(base + buffer_view.offset + accessor.offset)
+        );
+
+        return data[0..accessor.count];
+    }
+
+    pub fn getIndices(accessor: *const Accessor, allocator: std.mem.Allocator) ![]u32 {
+        if (accessor.type != .scalar) return error.AccessorTypeMismatch;
+
+        const buffer_view = accessor.buffer_view orelse return error.MissingBufferView;
+        const base: [*]const u8 = @ptrCast(
+            buffer_view.buffer.data orelse return error.BufferNotLoaded,
+        );
+        const offset_ptr = base + buffer_view.offset + accessor.offset;
+
+        const indices = try allocator.alloc(u32, accessor.count);
+        errdefer allocator.free(indices);
+
+        switch (accessor.component_type) {
+            .r_8u => {
+                const src: [*]const u8 = @ptrCast(offset_ptr);
+                for (0..accessor.count) |i| {
+                    indices[i] = src[i];
+                }
+            },
+            .r_16u => {
+                const src: [*]const u16 = @ptrCast(@alignCast(offset_ptr));
+                for (0..accessor.count) |i| {
+                    indices[i] = src[i];
+                }
+            },
+            .r_32u => {
+                const src: [*]const u32 = @ptrCast(@alignCast(offset_ptr));
+                @memcpy(indices, src[0..accessor.count]);
+            },
+            else => return error.AccessorComponentMismatch,
+        }
+
+        return indices;
+    }
 };
  
 pub const Attribute = extern struct {
