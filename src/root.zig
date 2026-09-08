@@ -513,6 +513,12 @@ pub const Image = extern struct {
     extras: Extras,
     extensions_count: usize,
     extensions: ?[*]Extension,
+
+    pub fn getImageData(image: *const Image) ![]const u8 {
+        const bv = image.buffer_view orelse return error.MissingBufferView;
+        const bv_data: [*]const u8 = @ptrCast(bv.buffer.data orelse return error.BufferNotLoaded);
+        return (bv_data + bv.offset)[0..bv.size];
+    }
 };
  
 pub const FilterType = enum(c_int) {
@@ -694,6 +700,25 @@ pub const Material = extern struct {
     extras: Extras,
     extensions_count: usize,
     extensions: ?[*]Extension,
+
+    pub fn getBaseColorTexture(material: *const Material) !Texture {
+        if (material.has_pbr_metallic_roughness == 0) {
+            return error.PbrMetallicRoughnessNotFound;
+        }
+
+        const texture = material.pbr_metallic_roughness.base_color_texture.texture 
+            orelse return error.NoTextureFound;
+
+
+        return texture.*;
+    }
+
+    pub fn getBaseColorFactor(material: *const Material) ![4]f32 {
+        if (material.has_pbr_metallic_roughness == 0) {
+            return error.PbrMetallicRoughnessNotFound;
+        }
+        return material.pbr_metallic_roughness.base_color_factor;
+    }
 };
  
 pub const MaterialMapping = extern struct {
@@ -776,7 +801,7 @@ pub const CameraOrthographic = extern struct {
     znear: f32,
     extras: Extras,
 };
- 
+
 pub const Camera = extern struct {
     name: ?MutCString,
     type: CameraType,
